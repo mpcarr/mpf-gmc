@@ -7,18 +7,25 @@ const DEFAULT_SHOW =  "res://show_creator.tscn"
 var config: ConfigFile
 var lights: = {}
 var tags: = {}
+var light_attr: = {}
 var verbose: bool = false
 
 @onready var button_mpf_config = $MainVContainer/TopHContainer/LeftVContainer/container_mpf_config/button_mpf_config
 @onready var edit_mpf_config = $MainVContainer/TopHContainer/LeftVContainer/container_mpf_config/edit_mpf_config
 @onready var button_show_scene = $MainVContainer/TopHContainer/LeftVContainer/container_show_scene/button_show_scene
 @onready var edit_show_scene = $MainVContainer/TopHContainer/LeftVContainer/container_show_scene/edit_show_scene
+@onready var button_mpf_monitor_config = $MainVContainer/TopHContainer/LeftVContainer/container_mpf_monitor_config/button_mpf_monitor_config
+@onready var edit_mpf_monitor_config = $MainVContainer/TopHContainer/LeftVContainer/container_mpf_monitor_config/edit_mpf_monitor_config
+
+@onready var button_show_output_folder = $MainVContainer/TopHContainer/LeftVContainer/container_show_output_folder/button_show_output_folder
+@onready var edit_show_output_folder = $MainVContainer/TopHContainer/LeftVContainer/container_show_output_folder/edit_show_output_folder
 
 @onready var edit_fps = $MainVContainer/TopHContainer/LeftVContainer/BottomFContainer/container_fps/edit_fps
 @onready var button_strip_lights = $MainVContainer/TopHContainer/LeftVContainer/BottomFContainer/button_strip_lights
 @onready var button_strip_times = $MainVContainer/TopHContainer/LeftVContainer/BottomFContainer/button_strip_times
 @onready var button_use_alpha = $MainVContainer/TopHContainer/LeftVContainer/BottomFContainer/button_use_alpha
 @onready var button_verbose = $MainVContainer/TopHContainer/LeftVContainer/BottomFContainer/button_verbose
+@onready var button_open_export = $MainVContainer/TopHContainer/LeftVContainer/BottomFContainer/button_open_folder
 
 
 @onready var button_generate_lights = $MainVContainer/TopHContainer/LeftVContainer/container_generators/button_generate_lights
@@ -45,11 +52,20 @@ func _ready():
 		if self.config.has_section_key("show_creator", "verbose"):
 			button_verbose.button_pressed = self.config.get_value("show_creator", "verbose")
 			verbose = button_verbose.button_pressed
+		if self.config.has_section_key("show_creator", "open_export_folder"):
+			button_open_export.button_pressed = self.config.get_value("show_creator", "open_export_folder")
 		if self.config.has_section_key("show_creator", "mpf_config"):
 			edit_mpf_config.text = self.config.get_value("show_creator", "mpf_config")
 			if edit_mpf_config.text:
 				debug_log("Found MPF config file '%s'" % edit_mpf_config.text)
 				self.parse_mpf_config()
+		if self.config.has_section_key("show_creator", "mpf_monitor_config"):
+			edit_mpf_monitor_config.text = self.config.get_value("show_creator", "mpf_monitor_config")
+			if edit_mpf_monitor_config.text:
+				debug_log("Found MPF monitor config file '%s'" % edit_mpf_monitor_config.text)
+				self.parse_mpf_monitor_config()
+		if self.config.has_section_key("show_creator", "show_output_folder"):
+			edit_show_output_folder.text = self.config.get_value("show_creator", "show_output_folder")
 		if self.config.has_section_key("show_creator", "show_scene"):
 			var scene_path = self.config.get_value("show_creator", "show_scene")
 			if FileAccess.file_exists(scene_path):
@@ -67,11 +83,15 @@ func _ready():
 
 	# Set the listeners *after* the initial values are set
 	button_mpf_config.pressed.connect(self._select_mpf_config)
+	button_mpf_monitor_config.pressed.connect(self._select_mpf_monitor_config)
 	button_show_scene.pressed.connect(self._select_show_scene)
 	button_generate_lights.pressed.connect(self._generate_lights)
 	button_generate_scene.pressed.connect(self._generate_scene)
 	button_save_light_positions.pressed.connect(self._save_light_positions)
+	button_show_output_folder.pressed.connect(self._select_show_output_folder)
 	edit_mpf_config.text_submitted.connect(self._save_mpf_config)
+	edit_mpf_monitor_config.text_submitted.connect(self._save_mpf_monitor_config)
+	edit_show_output_folder.text_submitted.connect(self._save_show_output_folder)
 	edit_show_scene.text_submitted.connect(self._save_show_scene)
 	button_show_maker.pressed.connect(self._generate_show)
 	button_preview_show.pressed.connect(self._preview_show)
@@ -87,12 +107,18 @@ func _ready():
 	button_strip_times.toggled.connect(self._on_option.bind("strip_times"))
 	button_use_alpha.toggled.connect(self._on_option.bind("use_alpha"))
 	button_verbose.toggled.connect(self._on_option.bind("verbose"))
+	button_open_export.toggled.connect(self._on_option.bind("open_export_folder"))
 
 	self._render_generate_button()
 
 	button_show_maker.disabled = animation_dropdown.item_count == 0
 
 func _generate_lights(lights_node: Node2D = null):
+	var global_space = Vector2(
+		ProjectSettings.get_setting("display/window/size/viewport_width"),
+		ProjectSettings.get_setting("display/window/size/viewport_height"))
+	debug_log("Setting light positions on a %s x %s plane" % [global_space.x, global_space.y])
+
 	if self.lights.is_empty():
 		printerr("No light configuration found.")
 		return
@@ -110,9 +136,13 @@ func _generate_lights(lights_node: Node2D = null):
 		if not light_child:
 			light_child = MPFShowLight.new()
 			light_child.name = l
+			print(l)
 			if self.config.has_section_key("lights", l):
 				light_child.restore(self.config.get_value("lights", l))
-			else:
+			elif self.light_attr.has(l):
+				print(self.light_attr[l])
+				light_child.global_position = Vector2(global_space.x * float(self.light_attr[l]["xpos"]), global_space.y * float(self.light_attr[l]["ypos"]))
+			else:                        
 				light_child.global_position = Vector2(-1, -1)
 			lights_node.add_child(light_child)
 			light_child.owner = scene
@@ -291,6 +321,24 @@ func _select_mpf_config():
 	var path = await dialog.file_selected
 	self._save_mpf_config(path)
 
+func _select_mpf_monitor_config():
+	var dialog = FileDialog.new()
+	dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+	dialog.access = FileDialog.ACCESS_FILESYSTEM
+	self.add_child(dialog)
+	dialog.popup_centered(Vector2i(1100, 900))
+	var path = await dialog.file_selected
+	self._save_mpf_monitor_config(path)
+
+func _select_show_output_folder():
+	var dialog = FileDialog.new()
+	dialog.file_mode = FileDialog.FILE_MODE_OPEN_DIR
+	dialog.access = FileDialog.ACCESS_FILESYSTEM
+	self.add_child(dialog)
+	dialog.popup_centered(Vector2i(1100, 900))
+	var path = await dialog.dir_selected
+	self._save_show_output_folder(path)
+
 func _save_mpf_config(path):
 	self.config.set_value("show_creator", "mpf_config", path)
 	edit_mpf_config.text = path
@@ -298,6 +346,19 @@ func _save_mpf_config(path):
 	if path:
 		self.parse_mpf_config()
 	self._render_generate_button()
+
+func _save_mpf_monitor_config(path):
+	self.config.set_value("show_creator", "mpf_monitor_config", path)
+	edit_mpf_monitor_config.text = path
+	self.config.save(CONFIG_PATH)
+	if path:
+		self.parse_mpf_monitor_config()
+	self._render_generate_button()
+    
+func _save_show_output_folder(path):
+	self.config.set_value("show_creator", "show_output_folder", path)
+	edit_show_output_folder.text = path
+	self.config.save(CONFIG_PATH)
 
 func _select_show_scene():
 	var dialog = FileDialog.new()
@@ -393,6 +454,48 @@ func parse_mpf_config():
 			tag_box.toggled.connect(self._save_tags)
 			tags_container.add_child(tag_box)
 
+func parse_mpf_monitor_config():
+	debug_log("Parsing MPF monitor config at %s" % edit_mpf_monitor_config.text)
+	var mpf_monitor_config = FileAccess.open(edit_mpf_monitor_config.text, FileAccess.READ)
+	var line = mpf_monitor_config.get_line()
+	self.light_attr = {}
+	while mpf_monitor_config.get_position() < mpf_monitor_config.get_length():
+		var line_stripped = line.get_slice(":", 0).strip_edges()
+		if not line_stripped:
+			line = mpf_monitor_config.get_line()
+			continue
+		#debug_log(line_stripped)
+		if line_stripped == "light":
+			debug_log(" - Found 'lights:' section!")
+			while line:
+				line = mpf_monitor_config.get_line()
+				var light = line.get_slice(":", 0).strip_edges()
+				if light.length()==0:
+					line = null
+					continue
+				light = light.dedent()
+
+				self.light_attr[light] = {}
+				#debug_log(light)
+				line = mpf_monitor_config.get_line()
+				var light_size = line.get_slice(":", 1).strip_edges()
+				light_size = light_size.dedent()
+				#debug_log(light_size)
+				self.light_attr[light]["size"] = light_size      
+				line = mpf_monitor_config.get_line()
+				var light_xpos = line.get_slice(":", 1).strip_edges()
+				light_xpos = light_xpos.dedent()
+				#debug_log(light_xpos)
+				self.light_attr[light]["xpos"] = light_xpos
+				line = mpf_monitor_config.get_line()
+				var light_ypos = line.get_slice(":", 1).strip_edges()
+				light_ypos = light_ypos.dedent()
+				#debug_log(light_ypos)
+				self.light_attr[light]["ypos"] = light_ypos                
+				
+				
+			#print(self.light_attr)
+		line = mpf_monitor_config.get_line()
 
 func debug_log(message: String):
 	if verbose:

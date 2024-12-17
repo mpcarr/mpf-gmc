@@ -22,8 +22,11 @@ var _light_color: Color
 var lights = []
 var spf: float
 var file: FileAccess
+var file_vbs: FileAccess
 var file_path: String
+var file_path_vbs: String
 var tags := []
+var output_folder: String
 
 var config
 var animation_name
@@ -55,7 +58,7 @@ func _enter_tree():
 	strip_empty_times = config.get_value("show_creator", "strip_times", false)
 	use_alpha = config.get_value("show_creator", "use_alpha", false)
 	tags = config.get_value("tags", animation_name, [])
-
+	output_folder = config.get_value("show_creator", "show_output_folder", OS.get_user_data_dir())
 
 func _ready():
 	set_process(false)
@@ -80,10 +83,13 @@ func _ready():
 	self.spf = 1.0 / self.fps
 	self.clip_children = CanvasItem.CLIP_CHILDREN_ONLY
 
-	self.file_path = "%s/%s.yaml" % [OS.get_user_data_dir(), animation_name]
+	self.file_path = "%s/%s.yaml" % [output_folder, animation_name]
+	self.file_path_vbs = "%s/%s.vbs" % [output_folder, animation_name]
 	self.file = FileAccess.open(self.file_path, FileAccess.WRITE)
 	self.file.store_line("#show_version=6")
-
+	
+	self.file_vbs = FileAccess.open(self.file_path_vbs, FileAccess.WRITE)
+	self.file_vbs.store_line("With CreateGlfShow(\"%s\")" % animation_name)
 	self.preview = { "show": animation_name, "timestamps": [], "light_steps": [] }
 
 	await RenderingServer.frame_post_draw
@@ -128,30 +134,51 @@ func snapshot():
 	var tex := get_viewport().get_texture().get_image()
 	var timestamp = self.animation_player.current_animation_position
 	var light_lines := []
+	var light_lines_vbs := []
 	var preview_dict = {}
 	for l in lights:
 		var c = l.get_color(tex, strip_unchanged_lights)
 		if c != null:
 			light_lines.append("    %s: \"%s\"" % [l.name, c.to_html(use_alpha)])
+			light_lines_vbs.append("      \"%s|100|%s\"" % [l.name, c.to_html(use_alpha)])
 			preview_dict[l.name] = c
 	if light_lines or not strip_empty_times:
 		file.store_line("- time: %0.5f" % timestamp)
+		file_vbs.store_line("  With .AddStep(%0.5f, Null, Null)" % timestamp)
 		if light_lines:
 			file.store_line("  lights:")
+			file_vbs.store_line("    .Lights = Array( _")            
 			for line in light_lines:
 				file.store_line(line)
+			
+			for i in range(light_lines_vbs.size()):
+				var line = light_lines_vbs[i]
+				if i == light_lines_vbs.size() - 1:
+					# Last item, don't add `, _`
+					file_vbs.store_line("%s _" % line)
+				else:
+					# Add `, _` for all other items
+					file_vbs.store_line("%s, _" % line)
+					
+			file_vbs.store_line("      )")
+			file_vbs.store_line("  End With")
 			# Only store preview on changes
 			self.preview["timestamps"].append(timestamp)
 			self.preview["light_steps"].append(preview_dict)
+		else:
+			file_vbs.store_line("  End With")
 
 func on_animation_finished(_animation_name=null):
 	self.finish()
 
 func finish():
 	set_process(false)
+	file_vbs.store_line("End With")   
 	file.close()
+	file_vbs.close()
 	for key in self.preview.keys():
 		self.config.set_value("preview", key, self.preview[key])
 	self.config.save(CONFIG_PATH)
-	OS.shell_show_in_file_manager(self.file_path)
+	if config.get_value("show_creator", "open_export_folder", false):
+		OS.shell_show_in_file_manager(self.file_path)
 	get_tree().quit()
